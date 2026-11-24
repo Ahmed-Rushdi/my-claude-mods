@@ -1,0 +1,29 @@
+{
+  "name": "progress",
+  "version": "0.4.0",
+  "description": "Explicit issue progress and reported activity, with a native pane and a shared Overview snapshot.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Ahmed Elkilani"
+  },
+  "userConfig": {
+    "owner_workflow": {
+      "type": "boolean",
+      "title": "Owner merge workflow",
+      "description": "Show the user-only merge when green action. Off for clean colleague installs; requires an explicit confirmation and branch protections. Never called by agent tools.",
+      "default": false
+    },
+    "web_controls": {
+      "type": "boolean",
+      "title": "Web refresh",
+      "description": "Allow explicit Overview web refresh requests to read GitHub metadata and publish this session snapshot without a model. Starts only after explicit Progress use; remains available while the pane is hidden.",
+      "default": false
+    },
+    "web_owner_workflow": {
+      "type": "boolean",
+      "title": "Web owner workflow",
+      "description": "Allow the authenticated Overview web view to prepare, confirm or cancel owner merge actions. Requires owner_workflow and web_controls. Separate opt-in from metadata refresh.",
+      "default": false
+    }
+  }
+}

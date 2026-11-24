@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "claude-tweaks-overview",
+  "description": "Local Overview trial: explicit issue progress and tasks for people.",
+  "owner": { "name": "claude-tweaks contributors" },
+  "plugins": [
+    { "name": "progress", "source": "./progress", "description": "Explicit issue progress, shared with the local web Overview.", "category": "productivity" },
+    { "name": "human-in-the-loop", "source": "./human-in-the-loop", "description": "Task assignment and acknowledged answers in Overview.", "category": "productivity" }
+  ]
+}

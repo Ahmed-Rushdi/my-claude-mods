@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f5f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#202329" media="(prefers-color-scheme: dark)">
+<title>Overview: PIN</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script></head>
+<body id="pin-page">
+<main class="pin">
+<h1 class="pin-name">Overview</h1>
+<p class="pin-lede">Enter the PIN to see and reply to what your Claude sessions are waiting on.</p>
+<form method="post" action="/unlock" id="pin-form" class="pin-form">
+<label for="pin" class="field-label">PIN</label>
+<input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" required autofocus aria-describedby="pin-message">
+<button type="submit" class="button primary">Unlock</button>
+</form>
+<div class="pin-notice" data-tone="fail">
+<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7.25"/><path d="M10 6v4.75M10 13.5v.25"/></svg>
+<p id="pin-message" role="status">{{message}}</p>
+</div>
+<p id="pin-unlock" class="pin-unlock" hidden></p>
+</main>
+</body></html>

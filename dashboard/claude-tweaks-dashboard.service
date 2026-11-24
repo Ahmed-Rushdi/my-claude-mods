@@ -1,0 +1,28 @@
+# claude-tweaks dashboard (#104, #167) as a systemd user unit. Nothing installs or starts it: copy
+# it by hand when you want the dashboard running (dashboard/README.md, "Install"):
+#   cp ~/claude-tweaks/dashboard/claude-tweaks-dashboard.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-tweaks-dashboard
+# It listens on ~/.local/state/claude-tweaks/dashboard/dashboard.sock only, and reads its config
+# from ~/.config/claude-tweaks/dashboard.toml. `tailscale serve` exposes the socket on the tailnet.
+# Point ExecStart at your checkout if it is not ~/my-claude-mods.
+[Unit]
+Description=claude-tweaks dashboard (a Unix socket for tailscale serve)
+Documentation=file:%h/claude-tweaks/dashboard/README.md
+# A config error makes every start fail: give up after five tries in two minutes.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I %h/my-claude-mods/dashboard/server.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+# No network socket can be made at all, only Unix ones (its own, and the answer endpoints').
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target

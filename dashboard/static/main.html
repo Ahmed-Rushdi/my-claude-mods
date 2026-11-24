@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f5f8">
+<meta name="csrf-token" content="{{csrf}}">
+<title>Overview</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script></head>
+<body id="main-page">
+<a class="skip-link" href="#progress">Skip to content</a>
+<header class="bar">
+<div class="bar-top"><h1 class="bar-name">Overview</h1><button type="button" id="theme-toggle" class="button quiet" aria-label="Appearance: system">System theme</button></div>
+<div class="connection"><p id="status" class="bar-status" role="status">Connecting</p><p id="checked" class="bar-checked"></p></div>
+<nav class="tabs" role="tablist" aria-label="Overview views">
+<button type="button" id="progress-tab" role="tab" aria-controls="progress" aria-selected="true" tabindex="0">Progress <span id="progress-count" class="tab-count">0</span></button>
+<button type="button" id="tasks-tab" role="tab" aria-controls="tasks" aria-selected="false" tabindex="-1">My tasks <span id="tasks-count" class="tab-count">0</span></button>
+<button type="button" id="usage-tab" role="tab" aria-controls="usage" aria-selected="false" tabindex="-1" hidden>Usage <span id="usage-count" class="tab-count tab-warn" hidden>0</span></button>
+</nav></header>
+<main class="layout">
+<p id="feed-notice" class="notice" role="status" hidden></p>
+<section id="progress" class="progress" role="tabpanel" aria-labelledby="progress-tab" tabindex="0">
+<div class="section-header"><h2 id="progress-heading">Issue progress</h2><span class="section-hint">Explicitly enrolled</span></div>
+<p id="progress-note" class="section-note">Issues you or an agent deliberately added. Only closed issues count as complete.</p>
+<div id="progress-list" aria-busy="true"><p class="loading">Loading published progress…</p></div>
+</section>
+<section id="tasks" class="inbox" role="tabpanel" aria-labelledby="tasks-tab" tabindex="0" hidden>
+<div class="section-header"><h2 id="tasks-heading">Waiting on you</h2></div>
+<p class="section-note">Read the context, then send an answer to the session.</p>
+<div id="task-list" aria-busy="true"><p class="loading">Loading your tasks…</p></div>
+<section id="sent" class="sent" aria-labelledby="sent-heading" hidden>
+<h2 id="sent-heading">Answers from this browser</h2>
+<ol id="sent-list" class="sent-list"></ol></section>
+</section>
+<section id="usage" class="usage" role="tabpanel" aria-labelledby="usage-tab" tabindex="0" hidden>
+<div class="section-header"><h2 id="usage-heading">Claude usage</h2><span class="section-hint">Profiles this dashboard reads</span></div>
+<p class="section-note">Readings come from Claude’s replies in each profile. Nothing here asks Claude.</p>
+<div id="usage-list"></div>
+</section></main>
+<p id="last-answer" class="visually-hidden" role="status"></p>
+</body></html>
