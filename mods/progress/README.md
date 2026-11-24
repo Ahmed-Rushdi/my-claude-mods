@@ -31,8 +31,22 @@ instructions for the optional web server and task mod.
 `goal` replaces the selection; `add` appends. Numbers, `#numbers`,
 `owner/repo#numbers`, and GitHub issue URLs work. A goal belongs to one
 repository and holds at most 200 issues. Every number is validated as an Issue
-before the selection changes. Standalone pull requests are refused. Parents do
-not enroll their children; name each child you want counted.
+before the selection changes. Standalone pull requests are refused.
+
+Naming a parent (`goal`, `add`, or the agent's enroll tool) also enrolls its
+GitHub sub-issues, and theirs, down three levels. As before #168, a parent
+with sub-issues in the goal is a heading: listed over the counted rows (the
+web view's "Parent issues"), not counted itself; its sub-issues are counted,
+and each row says the heading it is in (`in #507`), in the pane and the web
+view alike. A parent with none in the goal is an ordinary counted issue. Only
+named issues and their sub-issues are
+ever enrolled; tool activity, prompts, mentions and PRs enroll nothing. Refresh
+adds a sub-issue attached to an enrolled parent later and drops one detached,
+except one you also named yourself. `remove <parent>` removes the sub-issues
+that came only through it; `remove <child>` keeps that child out. Sub-issues in
+another repository are skipped (a goal is one repository), and where the 200
+issue cap leaves some out (named issues keep their places, the rest fill
+breadth first) or the depth bound does, the goal title says how many.
 
 `/progress` opens without enrolling anything. `hide` closes the pane and pauses
 GitHub refresh until an explicit open, add, goal or refresh. `clear` removes the
@@ -126,15 +140,19 @@ are refused atomically; this is not an arbitrary state-write API.
 
 ## Completion, metadata and freshness
 
-Every selected closed issue counts complete, including not planned and
+Every enrolled closed issue (selected, or a sub-issue of one; headings are not counted) counts complete, including not planned and
 reopened-then-closed issues. An open or reopened issue remains incomplete even
 when an older PR merged. PRs, labels and blockers remain metadata, not progress
 units. Native and web views use the same computed totals, section order, folds
 and ticket rows. Completed issues are labelled **Completed**, not shipped.
 
 While explicitly active, metadata polls every three minutes, paced by a soft
-1,000 GitHub GraphQL points/hour budget. Queries contain at most 30 Issue rows,
-without automatic sub-issue queries. A bounded PR-body follow-up supplies
+1,000 GitHub GraphQL points/hour budget. Queries contain at most 30 issues by
+number, each listing its sub-issues (up to 100) by number only: a full row
+nested under each would pass GitHub's 500,000-node limit. Sub-issue rows are
+read in further batches of 30, a level at a time, never one call per issue. A
+full batch is 5,700 nodes and 2 points by GitHub's own dry run; the budget
+charges each request what its query's shape costs, the way GitHub reckons it. A bounded PR-body follow-up supplies
 umbrella metadata when necessary; unchanged bodies are cached. Errors and cut
 answers retain the last good tickets and say why refresh failed.
 

@@ -82,8 +82,18 @@ const PULL = `fragment Pull on PullRequest {
   repository { nameWithOwner }
 }`
 
-// Each request asks at most 30 explicit issues, never children or standalone PRs.
+// Each request asks at most 30 issues by number, each with its sub-issues (one level of full rows, and the numbers
+// of theirs), never standalone PRs and never one call per issue.
 const ISSUES_PER_REQUEST = 30
+/** The most sub-issues one issue lists; GitHub's own page limit. */
+const SUBS_PER_ISSUE = 100
+/** A goal holds at most this many issues, its sub-issues included. */
+export const MAX_ISSUES = 200
+/** How many levels of sub-issues under a named issue are enrolled. */
+const MAX_DEPTH = 3
+// Sub-issues by number and repository only: a full row nested under each of 30 aliases asks GitHub for more
+// than its 500,000 nodes (#198 r1). Their rows are read in further batches of numbers, a level at a time.
+const SUBS = `subIssues(first: ${SUBS_PER_ISSUE}) { totalCount nodes { number repository { nameWithOwner } } }`
 const FOLLOW_UP_POINTS = 1
 function chunksOf(ref: GoalRef): number[][] {
   const chunks: number[][] = []
@@ -94,7 +104,7 @@ function chunksOf(ref: GoalRef): number[][] {
 export function goalQueries(ref: GoalRef): string[][] {
   const [owner = '', name = ''] = ref.repo.split('/')
   return chunksOf(ref).map(numbers => {
-    const issues = numbers.map(number => `i${number}: issue(number: ${number}) { ...Row }`).join('\n')
+    const issues = numbers.map(number => `i${number}: issue(number: ${number}) { ...Row ${SUBS} }`).join('\n')
     return ['gh', 'api', 'graphql', '-f', `owner=${owner}`, '-f', `name=${name}`, '-f',
       `query=query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name }\n${issues}\n} }\n${ROW}\n${PULL}`]
   })
@@ -110,9 +120,67 @@ export function importQueries(ref: GoalRef): string[][] {
   })
 }
 
-/** Four bounded connections per issue, plus one possible PR-metadata follow-up. */
-export function pointsOf(ref: GoalRef): number {
-  return chunksOf(ref).reduce((sum, numbers) => sum + Math.max(1, Math.round(numbers.length * 4 / 100)), FOLLOW_UP_POINTS)
+/**
+ * What GitHub charges for one `gh api graphql` request, by its own formula, out of the query's shape: each
+ * connection (a field asked with `first:` or `last:`) asks as many pages as the bounds of the connections
+ * around it multiply to, and holds that many times its own bound in nodes. `cost` is the pages over 100,
+ * at least 1; GitHub refuses a request of more than 500,000 `nodes`.
+ */
+export function shapeOf(argv: readonly string[]): { nodes: number; cost: number } {
+  let text = (argv.find(one => one.startsWith('query=')) ?? '').slice('query='.length)
+  const fragments = new Map<string, string>()
+  const closing = (open: number) => {
+    for (let at = open, depth = 0; at < text.length; at++) {
+      depth += text[at] === '{' ? 1 : text[at] === '}' ? -1 : 0
+      if (depth === 0) return at
+    }
+    return text.length
+  }
+
+  for (let found = /fragment\s+(\w+)\s+on\s+\w+\s*\{/.exec(text); found !== null; found = /fragment\s+(\w+)\s+on\s+\w+\s*\{/.exec(text)) {
+    const open = found.index + found[0].length - 1
+    const end = closing(open)
+    fragments.set(found[1] ?? '', text.slice(open + 1, end))
+    text = text.slice(0, found.index) + text.slice(end + 1)
+  }
+
+  let pages = 0
+  let nodes = 0
+  const walk = (body: string, times: number, depth: number) => {
+    const stack = [times]
+    for (const [token, spread, , args] of body.matchAll(/\.\.\.\s*on\b|\.\.\.\s*(\w+)|(\w+)\s*(\([^()]*\))?\s*\{|\}/g)) {
+      const around = stack.at(-1) ?? times
+      if (token === '}') stack.pop()
+      else if (spread !== undefined) { if (depth < 10) walk(fragments.get(spread) ?? '', around, depth + 1) }
+      else if (!token.startsWith('...')) {
+        const bound = Number(/\b(?:first|last):\s*(\d+)/.exec(args ?? '')?.[1] ?? 0)
+        if (bound > 0) { pages += around; nodes += around * bound }
+        stack.push(bound > 0 ? around * bound : around)
+      }
+    }
+  }
+  walk(text, 1, 0)
+
+  return { nodes, cost: Math.max(1, Math.round(pages / 100)) }
+}
+
+/** The most one request of `goalQueries` costs: a full batch. */
+const BATCH_POINTS = shapeOf(goalQueries({ repo: 'o/r', numbers: Array.from({ length: ISSUES_PER_REQUEST }, (_, at) => at + 1) })[0] ?? []).cost
+
+/**
+ * What one refresh may cost, at most: the batches that read `total` issues (the named ones and the
+ * sub-issues and headings last read), each a full one, plus one possible PR-metadata follow-up. The named
+ * issues are read in batches of their own, and each level of sub-issues may end on a part batch.
+ * It counts the issues last read, so a refresh that finds many new sub-issues can cost more than this once; the
+ * real cost goes into `spent` and sets the next refresh's spacing.
+ */
+export function pointsOf(goal: GoalRef & { tickets?: readonly Ticket[]; heads?: readonly Ticket[] }): number {
+  const named = goal.numbers.length
+  const total = Math.max(named, (goal.tickets?.length ?? 0) + (goal.heads?.length ?? 0))
+  const below = total - named
+  const batches = Math.ceil(named / ISSUES_PER_REQUEST) + (below > 0 ? Math.ceil(below / ISSUES_PER_REQUEST) + MAX_DEPTH - 1 : 0)
+
+  return batches * BATCH_POINTS + FOLLOW_UP_POINTS
 }
 
 const HOUR_MS = 3_600_000
@@ -169,7 +237,7 @@ type RawRow = RawPull & {
   closedByPullRequestsReferences?: { nodes?: RawPull[] }
   timelineItems?: { nodes?: { willCloseTarget?: boolean; source?: RawPull }[] }
   parent?: { number: number } | null
-  subIssues?: { nodes?: RawRow[] }
+  subIssues?: { totalCount?: number; nodes?: (Partial<RawRow> & { number: number })[] }
 }
 
 function pullOf(raw: RawPull): Pull | undefined {
@@ -328,6 +396,109 @@ function answered(stdouts: string | readonly string[], ref: GoalRef): Answered {
   return { repository, trunk }
 }
 
+/** Every issue row the answers hold by number, each asked by its own alias (a sub-issue is listed under its parent by number alone). */
+function rowsOf(repository: Record<string, RawRow | null>): Map<number, RawRow> {
+  const rows = new Map<number, RawRow>()
+
+  for (const [alias, raw] of Object.entries(repository)) {
+    if (/^i\d+$/.test(alias) && raw !== null && typeof raw === 'object' && typeof raw.title === 'string') rows.set(raw.number, raw)
+  }
+
+  return rows
+}
+
+type Reach = {
+  /** The goal's issues in order, the named ones first, each with the number of the issue it was found under (null: named, or parentless). */
+  found: { raw: RawRow; parent: number | null }[]
+  /** Sub-issues to enroll whose rows an answer does not hold yet. */
+  missing: number[]
+  /** Sub-issues of other repositories, skipped. */
+  other: number
+  /** Sub-issues left out for the cap (200 issues, or a page of 100 under one issue). */
+  over: number
+  /** Sub-issues deeper than MAX_DEPTH levels, left out. */
+  deep: number
+}
+
+/**
+ * The named issues and, breadth first, their sub-issues: one repository, MAX_DEPTH levels, MAX_ISSUES in all
+ * (the named issues keep their places), never one the person removed nor what lies under it.
+ */
+function reach(rows: ReadonlyMap<number, RawRow>, ref: GoalRef): Reach {
+  const removed = new Set(ref.removed ?? [])
+  const roots = [...new Set(ref.numbers)].filter(number => !removed.has(number))
+  const out: Reach = { found: [], missing: [], other: 0, over: 0, deep: 0 }
+  const seen = new Set(roots)
+  const queue = roots.map(number => ({ number, parent: null as number | null, depth: 0 }))
+  let slots = roots.length
+
+  for (let at = 0; at < queue.length; at++) {
+    const { number, parent, depth } = queue[at] as (typeof queue)[number]
+    const raw = rows.get(number)
+
+    if (raw === undefined) {
+      out.missing.push(number)
+      continue
+    }
+
+    out.found.push({ raw, parent: parent ?? raw.parent?.number ?? null })
+    const subs = raw.subIssues?.nodes ?? []
+    const total = Math.max(raw.subIssues?.totalCount ?? 0, subs.length)
+
+    if (depth >= MAX_DEPTH) {
+      out.deep += subs.filter(one => !removed.has(one.number) && !seen.has(one.number)).length + Math.max(0, total - subs.length)
+      continue
+    }
+
+    out.over += Math.max(0, total - subs.length)
+
+    for (const sub of subs) {
+      const repo = sub.repository?.nameWithOwner
+
+      if (repo !== undefined && repo !== null && !sameRepo(repo, ref.repo)) {
+        out.other++
+      } else if (!removed.has(sub.number) && !seen.has(sub.number)) {
+        if (slots >= MAX_ISSUES) {
+          out.over++
+        } else {
+          seen.add(sub.number)
+          slots++
+          queue.push({ number: sub.number, parent: raw.number, depth: depth + 1 })
+        }
+      }
+    }
+  }
+
+  return out
+}
+
+/**
+ * The goal's issues still in it once its numbers are `numbers`: those named, or under one that is (by `parent`,
+ * through any number of levels, headings included). A heading left with no sub-issue in the goal is a counted
+ * ticket again, as one with none from the start is.
+ */
+export function keepReachable(goal: { tickets: readonly Ticket[]; heads: readonly Ticket[] }, numbers: readonly number[]): { tickets: Ticket[]; heads: Ticket[] } {
+  const named = new Set(numbers)
+  const byNumber = new Map([...goal.heads, ...goal.tickets].map(one => [one.number, one]))
+  const isIn = (ticket: Ticket): boolean => {
+    const walked = new Set<number>()
+
+    for (let at: Ticket | undefined = ticket; at !== undefined && !walked.has(at.number); at = at.parent === null ? undefined : byNumber.get(at.parent)) {
+      if (named.has(at.number)) return true
+      walked.add(at.number)
+    }
+
+    return false
+  }
+  const tickets = goal.tickets.filter(isIn)
+  const heads = goal.heads.filter(isIn)
+  const over = new Set([...heads, ...tickets].map(one => one.parent))
+
+  return { tickets: [...tickets, ...heads.filter(one => !over.has(one.number))], heads: heads.filter(one => over.has(one.number)) }
+}
+
+const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`
+
 /** The goal's tickets out of the answers to `goalQueries`; throws with GitHub's words on an error. `closers`: what the bodies of merged PRs into umbrellas close, by PR number. */
 export function parseTickets(
   stdouts: string | readonly string[],
@@ -335,7 +506,6 @@ export function parseTickets(
   closers: Readonly<Record<string, readonly number[]>> = {},
 ): Pick<Goal, 'title' | 'tickets' | 'heads'> & { trunk: string; byBody: Pull[] } {
   const { repository, trunk } = answered(stdouts, ref)
-  const tickets: Ticket[] = []
   const heads: RawRow[] = []
   const byBody = new Map<number, Pull>()
 
@@ -350,26 +520,39 @@ export function parseTickets(
       throw new Error(`#${number} is a pull request. Progress tracks issues only.`)
     }
     heads.push(head)
-    for (const one of head.timelineItems?.nodes ?? []) {
+  }
+
+  const { found, other, over, deep } = reach(rowsOf(repository), ref)
+  // An issue another of the goal's sits under is a heading, not counted: its sub-issues are the work (as before #168).
+  const above = new Set(found.map(one => one.parent))
+  const tickets: Ticket[] = []
+  const headings: Ticket[] = []
+
+  for (const { raw, parent } of found) {
+    for (const one of raw.timelineItems?.nodes ?? []) {
       const pull = one.source === undefined ? undefined : pullOf(one.source)
-      if (pull !== undefined && isByBody(one, head.number) && (pull.repo === '' || sameRepo(pull.repo, ref.repo))) byBody.set(pull.number, pull)
+      if (pull !== undefined && isByBody(one, raw.number) && (pull.repo === '' || sameRepo(pull.repo, ref.repo))) byBody.set(pull.number, pull)
     }
-    // Parentage is metadata only: it never enrolls another issue or adds a heading.
-    tickets.push(ticketOf(head, head.parent?.number ?? null, ref.repo, closers))
+    ;(above.has(raw.number) ? headings : tickets).push(ticketOf(raw, parent, ref.repo, closers))
   }
 
   const [only] = heads
   const pulls = ref.numbers.length - heads.length
   const named = [heads.length > 0 ? `${heads.length} issue${heads.length === 1 ? '' : 's'}` : '', pulls > 0 ? `${pulls} PR${pulls === 1 ? '' : 's'}` : '']
-  const title = heads.length === 1 && only !== undefined && ref.numbers.length === 1 ? `#${only.number} ${only.title}` : named.filter(one => one !== '').join(', ')
-  // One the person removed stays out, a sub-issue of one named too.
-  const removed = new Set(ref.removed ?? [])
+  const base = heads.length === 1 && only !== undefined && ref.numbers.length === 1 ? `#${only.number} ${only.title}` : named.filter(one => one !== '').join(', ')
+  // What the sub-issue walk left out is said in the title, so a short pane is never a silent one.
+  const notes = [
+    other > 0 ? `${plural(other, 'sub-issue')} in another repository skipped` : '',
+    over > 0 ? `${plural(over, 'sub-issue')} not shown: over ${MAX_ISSUES} issues` : '',
+    deep > 0 ? `${plural(deep, 'sub-issue')} not shown: deeper than ${MAX_DEPTH} levels` : '',
+  ].filter(one => one !== '')
+  const title = notes.length === 0 ? base : `${base} (${notes.join('; ')})`
 
   return {
     title,
-    tickets: tickets.filter((one, index) => !removed.has(one.number) && tickets.findIndex(other => other.number === one.number) === index),
+    tickets,
     // A heading has a PR of its own where its sub-issues are gathered on one branch.
-    heads: [],
+    heads: headings,
     trunk,
     /** The merged PRs into umbrellas that only their bodies can tie to an issue. */
     byBody: [...byBody.values()],
@@ -462,9 +645,25 @@ export async function readGoal(
   ask: (argv: string[]) => Promise<string>,
 ): Promise<Pick<Goal, 'title' | 'tickets' | 'heads'> & Known & { trunk: string; spent: number }> {
   const stdouts: string[] = []
+  let spent = 0
+  const asking = async (query: string[]) => {
+    spent += shapeOf(query).cost
+    return await ask(query)
+  }
 
   for (const query of goalQueries(ref)) {
-    stdouts.push(await ask(query))
+    stdouts.push(await asking(query))
+  }
+
+  // Sub-issues listed by number alone are read in further batches (never one call each), a level at a time.
+  const asked = new Set(ref.numbers)
+  for (let level = 0; level < MAX_DEPTH; level++) {
+    const next = reach(rowsOf(answered(stdouts, ref).repository), ref).missing.filter(number => !asked.has(number))
+
+    if (next.length === 0) break
+
+    for (const number of next) asked.add(number)
+    for (const query of goalQueries({ ...ref, numbers: next })) stdouts.push(await asking(query))
   }
 
   const first = parseTickets(stdouts, ref)
@@ -484,7 +683,7 @@ export async function readGoal(
   const isAsked = numbers.length > 0
 
   if (isAsked) {
-    const answer = await ask(followUpQuery(ref.repo, numbers))
+    const answer = await asking(followUpQuery(ref.repo, numbers))
     const more = parseFollowUp(answer, ref.repo, numbers)
 
     for (const one of bodies) {
@@ -500,7 +699,7 @@ export async function readGoal(
     heads: read.heads,
     trunk: read.trunk,
     closers,
-    spent: pointsOf(ref) - (isAsked ? 0 : FOLLOW_UP_POINTS),
+    spent,
   }
 }
 
@@ -613,6 +812,11 @@ export function leadPull(ticket: Ticket): Pull | undefined {
 
 /** A piece of what a row says after its title, and how it reads: good news, bad news, or neither. */
 export type Part = { text: string; tone: 'dim' | 'good' | 'bad' }
+
+/** The heading a row's issue is in, where that heading is the goal's: `in #507`, said the same in the pane and the web view (#198). */
+export function underOf(ticket: Ticket, heads: readonly Ticket[]): Part[] {
+  return ticket.parent !== null && heads.some(one => one.number === ticket.parent) ? [{ text: `in #${ticket.parent}`, tone: 'dim' }] : []
+}
 
 /** What a row says after the title: its blockers, or its PR with its conflicts, checks and review. */
 export function partsOf(ticket: Ticket, status: Status, all: readonly Ticket[]): Part[] {

@@ -1228,7 +1228,8 @@
     updateDocumentReader(node, state);
     return node;
   }
-  function issueRow(ticket, repo, key, session, sessionKey) {
+  // heads: the goal's headings; a row whose parent is one says so, as the pane does (#198).
+  function issueRow(ticket, repo, key, session, sessionKey, heads = []) {
     const item = el("li", null, "issue-item");
     const details = el("details", null, "issue");
     rememberDetails(details, key, false);
@@ -1237,6 +1238,7 @@
     state.classList.add("issue-state"); if (!ticket.isOpen) state.classList.add("closed");
     const title = el("span", null, "issue-label");
     title.append(el("span", "#" + ticket.number, "issue-number"), ticket.title);
+    if (ticket.parent && heads.some((head) => head.number === ticket.parent)) title.append(el("span", "in #" + ticket.parent, "issue-parent"));
     summary.append(state, title, icon("chevron"));
     details.append(summary);
     const body = el("div", null, "issue-detail");
@@ -1451,7 +1453,7 @@
       const list = el("ol", null, "issue-list");
       const expanded = section.fold === "all" || disclosureExpanded.has(sectionKey);
       for (const [index, ticket] of section.tickets.entries()) {
-        const row = issueRow(ticket, snap.goal?.repo || "", sessionKey + ":issue:" + section.id + ":" + ticket.number, session, sessionKey);
+        const row = issueRow(ticket, snap.goal?.repo || "", sessionKey + ":issue:" + section.id + ":" + ticket.number, session, sessionKey, snap.goal?.heads || []);
         if (!expanded && index >= 5) row.hidden = true;
         list.append(row);
       }
@@ -1470,7 +1472,7 @@
     }
     if (snap.goal?.heads?.length) {
       const heads = el("details", null, "activity"); heads.append(el("summary", "Parent issues · " + snap.goal.heads.length)); rememberDetails(heads, sessionKey + ":heads", false);
-      const list = el("ol", null, "issue-list"); for (const ticket of snap.goal.heads) list.append(issueRow(ticket, snap.goal.repo, sessionKey + ":head:" + ticket.number, session, sessionKey)); heads.append(list); node.append(heads);
+      const list = el("ol", null, "issue-list"); for (const ticket of snap.goal.heads) list.append(issueRow(ticket, snap.goal.repo, sessionKey + ":head:" + ticket.number, session, sessionKey, snap.goal.heads)); heads.append(list); node.append(heads);
     }
     const activity = activityOf(snap.activity, session, tasks, sessionKey); if (activity) node.append(activity);
     return node;

@@ -79,6 +79,7 @@ small,.mono,.num,time,.tab-count{font-variant-numeric:tabular-nums}
 .issue-state.closed{color:var(--good)}
 .issue-label{font-size:13px;font-weight:500;line-height:1.5}
 .issue-number{color:var(--muted);font-weight:400;margin-right:6px;font-size:12px}
+.issue-parent{color:var(--muted);font-weight:400;margin-left:6px;font-size:12px}
 .issue>summary>.icon{color:var(--muted);width:14px;height:18px}
 .issue[open]>summary>.icon{transform:rotate(90deg)}
 .issue-detail{padding:0 14px 13px 39px;color:var(--muted);font-size:12px}

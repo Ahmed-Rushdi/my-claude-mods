@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import type { Agent, Pull, Round, Ticket } from '../types'
+import { asGitHub } from './github-shape'
 
 const NOW = 1_700_000_000_000
 
@@ -375,12 +376,8 @@ async function world($: Engine, on: On, saved?: unknown, kept: Record<string, un
     }
 
     // A number that names a PR answers as one, as `issueOrPullRequest` does.
-    const answer = JSON.parse(github.answer)
-
-    // Issue aliases from the fixture are returned only when explicitly queried.
-    for (const top of Object.values(answer.data.repository) as any[]) {
-      for (const child of top?.subIssues?.nodes ?? []) answer.data.repository[`i${child.number}`] = child
-    }
+    // Issue aliases of sub-issues from the fixture are returned only when explicitly queried.
+    const answer = asGitHub(JSON.parse(github.answer), asked)
 
     // The head of #540 as the board reads it.
     if (answer.data.repository.i507 !== undefined) {

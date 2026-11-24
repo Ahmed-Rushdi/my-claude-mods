@@ -19,6 +19,7 @@ import {
   SETTLE_MS,
   gapOf,
   goalQueries,
+  keepReachable,
   importQueries,
   leadPull,
   openBlockers,
@@ -27,6 +28,7 @@ import {
   parsePull,
   parseRules,
   partsOf,
+  underOf,
   pointsOf,
   pullQuery,
   readGoal,
@@ -416,7 +418,7 @@ async function bind($: EngineInterface, id: string, mine: { id: string }): Promi
       shown = savedActivity(saved.activity) ?? copy(EMPTY)
       const keptGoal = savedGoal(saved.goal)
       if (ref && keptGoal && sameRepo(keptGoal.repo, ref.repo)) {
-        restored = { ...keptGoal, ...ref, tickets: keptGoal.tickets.filter(one => ref?.numbers.includes(one.number)), heads: [] }
+        restored = { ...keptGoal, ...ref, ...keepReachable(keptGoal, ref.numbers) }
       }
     }
   } catch { /* Missing/corrupt snapshot restores no other session's state. */ }
@@ -648,8 +650,9 @@ async function refresh($: EngineInterface, isForced = false): Promise<Refreshed>
     spentLast = spent
     await update($, goal, current => {
       if (!isCurrent() || current === null || !isStillAsked(current, asked)) return current
-      const selected = new Set(current.numbers)
-      return { ...current, ...parsed, tickets: parsed.tickets.filter(one => selected.has(one.number)), fetchedAt: at, error: '' }
+      // A number removed while GitHub was asked is left out of its answer here (`isStillAsked` lets the answer through).
+      const out = new Set(current.removed ?? [])
+      return { ...current, ...parsed, ...keepReachable({ tickets: parsed.tickets.filter(one => !out.has(one.number)), heads: parsed.heads.filter(one => !out.has(one.number)) }, current.numbers), fetchedAt: at, error: '' }
     })
     if (!(await isMine())) return 'skipped'
     await publishOverview($, isCurrent)
@@ -741,17 +744,18 @@ async function removeNumbers($: EngineInterface, numbers: readonly number[]): Pr
     const known = new Set([...held.numbers, ...held.tickets.map(one => one.number)])
     gone = [...new Set(numbers)].filter(number => known.has(number))
     const out = new Set(gone)
+    const left = held.numbers.filter(number => !out.has(number))
 
     return gone.length === 0
       ? held
       : {
           ...held,
-          numbers: held.numbers.filter(number => !out.has(number)),
+          numbers: left,
           added: (held.added ?? []).filter(number => !out.has(number)),
           removed: [...new Set([...(held.removed ?? []), ...gone])],
           // Shown without it at once; nothing is asked of GitHub for this.
-          tickets: held.tickets.filter(one => !out.has(one.number)),
-          heads: held.heads.filter(one => !out.has(one.number)),
+          // A sub-issue that came only through a removed parent goes with it.
+          ...keepReachable({ tickets: held.tickets.filter(one => !out.has(one.number)), heads: held.heads.filter(one => !out.has(one.number)) }, left),
         }
   })
 
@@ -1921,7 +1925,8 @@ export const register: Register = (on, options) => {
     const inSections = view.total
 
     const row = (ticket: Ticket, status: Status) => {
-      const parts = partsOf(ticket, status, tickets)
+      // A sub-issue says the heading it is in, as the web view does (#198): its parts after its title.
+      const parts = [...underOf(ticket, g?.heads ?? []), ...partsOf(ticket, status, tickets)]
       const workers = agentsOn(ticket, s.agents)
         .map(one => ` ◐ ${one.type} ${age(now - one.startedAt)}`)
         .join('')
@@ -1936,6 +1941,28 @@ export const register: Register = (on, options) => {
           {toned(parts)}
           {roundTag(leadPull(ticket)?.number)}
           {workers !== '' && <Text color={COLOR.doing}>{workers}</Text>}
+        </Button>
+      )
+    }
+
+    /** A heading, over the counted rows and not counted itself (as before #168): pressed, it opens with its own PR, where its sub-issues are gathered on one branch. */
+    const headRow = (head: Ticket) => {
+      const status = standing(head)
+      const pull = leadPull(head)
+
+      return (
+        <Button key={`t${head.number}`} plain dimColor={status === 'done'} hover={feel(`t${head.number}`).hover} onPress={press(`t${head.number}`, () => openDoc($, g?.repo ?? '', head.number))}>
+          {feel(`t${head.number}`).mark}
+          {oneLine(`#${head.number} ${head.title}`, Math.max(12, columns - 30))}
+          {toned([...underOf(head, g?.heads ?? []), ...partsOf(head, status, tickets)])}
+          {roundTag(pull?.number)}
+          {pull !== undefined && <Text dimColor> → {pull.base}</Text>}
+          {status === 'yours' && (
+            <Text bold color={COLOR.yours}>
+              {' '}
+              waiting for you
+            </Text>
+          )}
         </Button>
       )
     }
@@ -1988,6 +2015,7 @@ export const register: Register = (on, options) => {
                 </Text>
               )}
             </Text>
+            {g.heads.map(headRow)}
             <Box flexDirection="row" columnGap={3}>
               <Button
                 key="refresh"

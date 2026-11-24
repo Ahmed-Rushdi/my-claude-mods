@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import type { Agent, Pull, Round, Ticket } from '../types'
+import { asGitHub } from './github-shape'
 
 const NOW = 1_700_000_000_000
 
@@ -118,6 +119,11 @@ const GITHUB = JSON.stringify({
     },
   },
 })
+
+/** #507 as GITHUB has it, with no sub-issues: the tests that name it mean one issue. #198 brings sub-issues in, so a test that wants them reads GITHUB. */
+const SOLO = JSON.stringify((() => { const data = JSON.parse(GITHUB); delete data.data.repository.i507.subIssues; return data })())
+/** `data` (parsed GITHUB) without #507's sub-issues, once the test has taken the rows it wants from them. */
+const withoutSubs = (data: any) => { delete data.data.repository.i507.subIssues; return JSON.stringify(data) }
 
 const BODY = JSON.stringify({
   data: {
@@ -247,7 +253,7 @@ async function world($: Engine, on: On, saved?: unknown, kept: Record<string, un
   github.bases = {}
   github.mergedAt = {}
   github.bodies = {}
-  github.answer = GITHUB
+  github.answer = SOLO
   github.elsewhere = []
   github.isCut = false
   github.followUp = null
@@ -380,7 +386,7 @@ async function world($: Engine, on: On, saved?: unknown, kept: Record<string, un
     }
 
     // A number that names a PR answers as one, as `issueOrPullRequest` does.
-    const answer = JSON.parse(github.answer)
+    const answer = asGitHub(JSON.parse(github.answer), asked)
     const missingIssue = [...asked.matchAll(/\bi(\d+): issue\(/g)].find(([, number]) => answer.data.repository[`i${number}`]?.__typename === 'PullRequest')
     if (missingIssue) return { value: { ...run(JSON.stringify({ ...answer, errors: [{ type: 'NOT_FOUND', path: ['repository', `i${missingIssue[1]}`] }] })), exitCode: 1 } }
 
@@ -488,33 +494,173 @@ test('#165 an agent explicitly enrolls an issue and gets the same public snapsho
   await pane.unmount()
 })
 
-test('#165 explicitly selected parent and child retain hierarchy without changing native groups or counts', async ($, on) => {
+test('#165 explicitly selected parent and child retain hierarchy: since #198 the parent is the heading over the child', async ($, on) => {
   const { store, ran } = await world($, on)
   const data = JSON.parse(GITHUB)
   data.data.repository.i511 = { ...data.data.repository.i507.subIssues.nodes[0], parent: { number: 507 } }
-  github.answer = JSON.stringify(data)
+  github.answer = withoutSubs(data)
   await start($)
   await $.tool.call({ tool: 'mcp__progress__enroll', issues: '507 511' })
   const published = store['overview:s1'] as any
   expect(published.goal.numbers).toEqual([507, 511])
-  expect(published.goal.tickets.map((one: any) => [one.number, one.parent])).toEqual([[507, null], [511, 507]])
-  expect(published.goal.heads).toEqual([])
-  expect(published.view.total).toBe(2)
-  expect(published.view.sections.map((one: any) => [one.id, one.tickets.map((ticket: any) => ticket.number)])).toEqual([['yours', [511]], ['doing', [507]]])
+  // #198: a parent with a sub-issue in the goal is its heading, not counted (pre-#168 style).
+  expect(published.goal.tickets.map((one: any) => [one.number, one.parent])).toEqual([[511, 507]])
+  expect(published.goal.heads.map((one: any) => one.number)).toEqual([507])
+  expect(published.view.total).toBe(1)
+  expect(published.view.sections.map((one: any) => [one.id, one.tickets.map((ticket: any) => ticket.number)])).toEqual([['yours', [511]]])
   const pane = await $.ui.mount(PANE)
   expect(await seen(pane, /#507 Eval redesign/)).not.toContain('MISSING')
-  expect(await seen(pane, /#511 Scorer contract/)).not.toContain('MISSING')
-  expect(await seen(pane, /0\/2/)).not.toContain('MISSING')
+  expect(await seen(pane, /#511 Scorer contract in #507/)).not.toContain('MISSING')
+  expect(await seen(pane, /0\/1/)).not.toContain('MISSING')
   await pane.unmount()
   expect(ran.some(one => /parent\s*\{\s*number\s*\}/.test(one.at(-1) ?? ''))).toBe(true)
-  expect(ran.every(one => !one.at(-1)?.includes('subIssues('))).toBe(true)
+  expect(ran.every(one => !one.at(-1)?.includes('issueOrPullRequest('))).toBe(true)
+})
+
+/** #198: enrolling a parent enrolls its sub-issues, and only those. */
+const sub = (number: number, title: string, more: Record<string, unknown> = {}) => issue(number, title, { parent: { number: 1 }, ...more })
+const parentWith = (children: Record<string, unknown>[], more: Record<string, unknown> = {}) => ({ ...issue(1, 'Parent'), subIssues: { totalCount: children.length, nodes: children }, ...more })
+const answerWith = (rows: Record<string, unknown>) => JSON.stringify({ data: { repository: rows } })
+const numbersOf = (store: Record<string, unknown>) => ((store['overview:s1'] as any).goal.tickets as any[]).map(one => [one.number, one.parent])
+/** The goal's headings: issues with sub-issues in the goal, shown over them and not counted (pre-#168 style). */
+const headsOf = (store: Record<string, unknown>) => ((store['overview:s1'] as any).goal.heads as any[]).map(one => [one.number, one.parent])
+
+test('#198 enrolling a parent enrolls its sub-issues under it as a heading, through the command and the tool', async ($, on) => {
+  const { store, ran } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'Child A'), sub(3, 'Child B')]) })
+  await start($)
+  await progress($, 'goal 1')
+  expect(headsOf(store)).toEqual([[1, null]])
+  expect(numbersOf(store)).toEqual([[2, 1], [3, 1]])
+  expect((store['goal:s1'] as any).numbers).toEqual([1])
+  // The heading is not counted; its sub-issues are.
+  expect((store['overview:s1'] as any).view.total).toBe(2)
+  expect(ran.some(one => one.at(-1)?.includes('subIssues('))).toBe(true)
+  await progress($, 'clear')
+  await $.tool.call({ tool: 'mcp__progress__enroll', issues: '1' })
+  expect(headsOf(store)).toEqual([[1, null]])
+  expect(numbersOf(store)).toEqual([[2, 1], [3, 1]])
+})
+
+test('#198 a named parent with no sub-issues is a counted ticket, not a heading', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([]) })
+  await start($)
+  await progress($, 'goal 1')
+  expect(headsOf(store)).toEqual([])
+  expect(numbersOf(store)).toEqual([[1, null]])
+  expect((store['overview:s1'] as any).view.total).toBe(1)
+})
+
+test('#198 sub-issues of sub-issues are enrolled too', async ($, on) => {
+  const { store } = await world($, on)
+  const deep = sub(2, 'Child', { subIssues: { totalCount: 1, nodes: [{ number: 3 }] } })
+  github.answer = answerWith({ i1: parentWith([deep]), i3: issue(3, 'Grandchild') })
+  await start($)
+  await progress($, 'goal 1')
+  expect(headsOf(store)).toEqual([[1, null], [2, 1]])
+  expect(numbersOf(store)).toEqual([[3, 2]])
+})
+
+test('#198 refresh adds a sub-issue attached later and drops one detached, but keeps one named too', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'A'), sub(3, 'B')]), i3: sub(3, 'B') })
+  await start($)
+  await progress($, 'goal 1 3')
+  expect(headsOf(store).map(one => one[0])).toEqual([1])
+  expect(numbersOf(store).map(one => one[0])).toEqual([3, 2])
+  github.answer = answerWith({ i1: parentWith([sub(4, 'C')]), i3: issue(3, 'B') })
+  await progress($, 'refresh')
+  expect(headsOf(store).map(one => one[0])).toEqual([1])
+  expect(numbersOf(store).map(one => one[0]).sort()).toEqual([3, 4])
+})
+
+test('#198 removing a parent removes the children that came only through it; an explicit child stays', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'A'), sub(3, 'B')]), i3: sub(3, 'B') })
+  await start($)
+  await progress($, 'goal 1 3')
+  await progress($, 'remove 1')
+  expect(headsOf(store)).toEqual([])
+  expect(numbersOf(store)).toEqual([[3, 1]])
+  expect((store['goal:s1'] as any).numbers).toEqual([3])
+})
+
+test('#198 a sub-issue removed by name stays out through a refresh', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'A'), sub(3, 'B')]) })
+  await start($)
+  await progress($, 'goal 1')
+  await progress($, 'remove 2')
+  await progress($, 'refresh')
+  expect(headsOf(store).map(one => one[0])).toEqual([1])
+  expect(numbersOf(store).map(one => one[0])).toEqual([3])
+})
+
+test('#198 a heading whose last sub-issue is removed is a counted ticket again at once', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'A')]) })
+  await start($)
+  await progress($, 'goal 1')
+  expect(headsOf(store).map(one => one[0])).toEqual([1])
+  await progress($, 'remove 2')
+  expect(headsOf(store)).toEqual([])
+  expect(numbersOf(store)).toEqual([[1, null]])
+  expect((store['overview:s1'] as any).view.total).toBe(1)
+})
+
+test('#198 a sub-issue in another repository is skipped, with a note in the goal title', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'Here', { repository: { nameWithOwner: 'O/R' } }), sub(9, 'There', { repository: { nameWithOwner: 'x/y' } })]) })
+  await start($)
+  await progress($, 'goal 1')
+  expect(headsOf(store).map(one => one[0])).toEqual([1])
+  expect(numbersOf(store).map(one => one[0])).toEqual([2])
+  expect((store['overview:s1'] as any).goal.title).toContain('1 sub-issue in another repository skipped')
+})
+
+test('#198 the 200-issue cap holds: explicit issues first, the rest of the sub-issues left out and said', async ($, on) => {
+  const { store } = await world($, on)
+  const kids = (from: number) => Array.from({ length: 100 }, (_, at) => sub(from + at, `K${from + at}`))
+  github.answer = answerWith({ i1: parentWith(kids(10)), i2: { ...issue(2, 'P2'), subIssues: { totalCount: 100, nodes: kids(200) } }, i3: { ...issue(3, 'P3'), subIssues: { totalCount: 100, nodes: kids(400) } } })
+  await start($)
+  await progress($, 'goal 1 2 3')
+  // Headings and tickets together: 200 issues are read. #3's sub-issues are all over the cap, so #3 is a counted ticket.
+  expect(headsOf(store).map(one => one[0])).toEqual([1, 2])
+  expect(numbersOf(store).length).toBe(198)
+  expect(numbersOf(store)[0]).toEqual([3, null])
+  expect((store['overview:s1'] as any).goal.title).toContain('103 sub-issues not shown: over 200 issues')
+})
+
+test('#198 a heading is drawn over the counted rows, and a sub-issue row says the heading it is in, as the web view does', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: parentWith([sub(2, 'Child A'), sub(3, 'Child B')]), i4: issue(4, 'Other') })
+  await start($)
+  await progress($, 'goal 1 4')
+  const published = store['overview:s1'] as any
+  expect(published.goal.heads.map((one: any) => one.number)).toEqual([1])
+  expect(published.view.sections[0].tickets.map((one: any) => one.number)).toEqual([4, 2, 3])
+  const pane = await $.ui.mount(PANE)
+  expect(await seen(pane, /#1 Parent/)).not.toContain('MISSING')
+  expect(await seen(pane, /#2 Child A in #1/)).not.toContain('MISSING')
+  expect(await seen(pane, /#4 Other in #/)).toContain('MISSING')
+  expect(await seen(pane, /0\/3/)).not.toContain('MISSING')
+  await pane.unmount()
+})
+
+test('#198 a mention in a ticket does not enroll anything', async ($, on) => {
+  const { store } = await world($, on)
+  github.answer = answerWith({ i1: issue(1, 'Solo', { body: 'See #2 and blocked by #3' }), i2: issue(2, 'Other') })
+  await start($)
+  await progress($, 'goal 1')
+  expect(numbersOf(store)).toEqual([[1, null]])
 })
 
 test('#165 parent metadata never enrolls relatives and survives a cached native resume', async ($, on) => {
   const { store, ran } = await world($, on)
   const data = JSON.parse(GITHUB)
   data.data.repository.i511 = { ...data.data.repository.i507.subIssues.nodes[0], parent: { number: 507 } }
-  github.answer = JSON.stringify(data)
+  github.answer = withoutSubs(data)
   await start($)
   await progress($, 'goal 507')
   expect((store['overview:s1'] as any).goal.tickets.map((one: any) => one.number)).toEqual([507])
@@ -540,7 +686,6 @@ test('#165 parent metadata never enrolls relatives and survives a cached native 
   expect((store['overview:s1'] as any).goal.tickets[0].parent).toBe(507)
   const resumed = ran.slice(beforeResume).map(one => one.at(-1) ?? '').join('\n')
   expect(resumed).not.toContain('i507: issue(')
-  expect(resumed).not.toContain('subIssues(')
 })
 
 test('#165 a PR number or URL cannot replace an existing explicit issue goal', async ($, on) => {
@@ -571,7 +716,7 @@ test('#165 completion follows closed issues, including not planned; an old merge
   const pane = await $.ui.mount(PANE)
   expect(await seen(pane, /2\/3/)).not.toContain('MISSING')
   expect(await seen(pane, /#1 Reopened.*merged #101/)).not.toContain('MISSING')
-  expect(ran.every(one => !one.at(-1)?.includes('subIssues(') && !one.at(-1)?.includes('issueOrPullRequest('))).toBe(true)
+  expect(ran.every(one => !one.at(-1)?.includes('issueOrPullRequest('))).toBe(true)
   await pane.unmount()
 })
 
@@ -609,7 +754,7 @@ test('#165 legacy inferred additions wait for deliberate import and the original
   const data = JSON.parse(GITHUB)
   data.data.repository.i511 = data.data.repository.i507.subIssues.nodes[0]
   data.data.repository.i24 = { __typename: 'PullRequest' }
-  github.answer = JSON.stringify(data)
+  github.answer = withoutSubs(data)
   await start($)
   expect(ran).toEqual([])
   await progress($, '')
@@ -973,7 +1118,7 @@ test('#165 metadata reads retain labels, blockers and reviewed PRs without expan
   data.data.repository.i512 = data.data.repository.i507.subIssues.nodes[1]
   data.data.repository.i513 = data.data.repository.i507.subIssues.nodes[2]
   data.data.repository.i512.labels = { nodes: [{ name: 'deferred' }] }
-  github.answer = JSON.stringify(data)
+  github.answer = withoutSubs(data)
   await start($)
   await progress($, 'goal 511 512 513')
   const snapshot = store['overview:s1'] as any
@@ -983,7 +1128,7 @@ test('#165 metadata reads retain labels, blockers and reviewed PRs without expan
   expect(snapshot.view.sections.find((one: any) => one.id === 'yours').tickets[0].number).toBe(511)
   expect(snapshot.view.sections.find((one: any) => one.id === 'doing').tickets[0].number).toBe(512)
   expect(snapshot.view.sections.find((one: any) => one.id === 'blocked').tickets[0].number).toBe(513)
-  expect(ran.every(one => !one.at(-1)?.includes('subIssues('))).toBe(true)
+  expect(ran.every(one => !one.at(-1)?.includes('issueOrPullRequest('))).toBe(true)
 })
 
 test('#165 large explicit selections use bounded Issue queries and idle refresh stays within its GitHub budget', async ($, on) => {
@@ -1127,7 +1272,7 @@ test('#165 removing a selected parent retains its explicitly selected child', as
   const { store } = await world($, on)
   const data = JSON.parse(GITHUB)
   data.data.repository.i511 = { ...data.data.repository.i507.subIssues.nodes[0], parent: { number: 507 } }
-  github.answer = JSON.stringify(data)
+  github.answer = withoutSubs(data)
   await start($)
   await progress($, 'goal 507 511')
   await progress($, 'remove 507')
