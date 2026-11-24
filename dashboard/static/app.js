@@ -155,25 +155,33 @@
   });
   applyTheme();
 
-  // The browser tab says how many things wait on the owner: "(2) Overview" and a count badge on
-  // the page icon, which blinks three times when the count rises (so also on a first load with a
-  // count), then holds (never with reduced motion, never for ever). A steady count changes
-  // nothing: no new icon request, and a running blink plays out.
+  // The browser tab says how many things wait on the owner. T3 Code 0.1.11 shows the same globe
+  // for every web tab and never shows a page's icon, but its tab label is the page title, where
+  // coloured emoji render: "🟦 Overview" when nothing waits, "🔴 2 · Overview" when something does.
+  // When the count rises (so also on a first load with a count) the title alternates with
+  // "⭕ 2 · Overview" and the page icon blinks its badge, three times, then both hold (never with
+  // reduced motion, never for ever). A steady count writes nothing: no title, no icon request,
+  // and a running blink plays out. The badge is kept for browsers, and a later T3, that show it.
+  const QUIET_TITLE = "🟦 Overview";
   const pageIcon = document.querySelector("link[rel=icon]");
   let attention = 0; let blinking = null;
+  function attentionTitle(count, lit) {
+    return (lit ? "🔴 " : "⭕ ") + count + " · Overview";
+  }
   function showAttention(count) {
-    document.title = count ? "(" + count + ") Overview" : "Overview";
     if (count === attention) return;
     const badge = count ? "/favicon.svg?n=" + Math.min(count, 99) : "/favicon.svg";
     const rose = count > attention; attention = count;
     clearInterval(blinking); blinking = null;
-    if (!pageIcon) return;
-    pageIcon.setAttribute("href", badge);
+    document.title = count ? attentionTitle(count, true) : QUIET_TITLE;
+    if (pageIcon) pageIcon.setAttribute("href", badge);
     if (!rose || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     let frames = 6;
     blinking = setInterval(() => {
       frames -= 1;
-      pageIcon.setAttribute("href", frames % 2 ? "/favicon.svg" : badge);
+      const lit = frames % 2 === 0;
+      document.title = attentionTitle(count, lit);
+      if (pageIcon) pageIcon.setAttribute("href", lit ? badge : "/favicon.svg");
       if (!frames) { clearInterval(blinking); blinking = null; }
     }, 400);
   }
