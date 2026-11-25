@@ -537,7 +537,7 @@ export const register: Register = (on, options) => {
     }
 
     if (!(await hasDashboardConfig($))) {
-      return { result: { text: 'The dashboard is not set up: its config file is missing (dashboard/README.md, Install, step 1). Nothing was run.' } }
+      return { result: [textBlock('The dashboard is not set up: its config file is missing (dashboard/README.md, Install, step 1). Nothing was run.')] }
     }
 
     if (action === 'status') {
@@ -546,7 +546,7 @@ export const register: Register = (on, options) => {
 
     const done = await pressDashboard($, action)
 
-    return done === undefined ? { result: { text: DASHBOARD_BUSY } } : dashboardResult(done.dashboard, `${done.message}\n`)
+    return done === undefined ? { result: [textBlock(DASHBOARD_BUSY)] } : dashboardResult(done.dashboard, `${done.message}\n`)
   })
 
   // The desktop app's menu on a transcript row: the dashboard's address to
@@ -2093,6 +2093,9 @@ async function pressDashboard($: EngineInterface, action: 'start' | 'stop'): Pro
   }
 }
 
+/** One text block of a tool's answer. */
+const textBlock = (text: string) => ({ type: 'text' as const, text })
+
 const DASHBOARD_BUSY = 'The dashboard is already starting or stopping.'
 
 /** What a press of Start or Stop says: what it did, and how the dashboard stands now. */
@@ -2102,9 +2105,12 @@ async function pressDashboardToast($: EngineInterface, action: 'start' | 'stop')
   $.ui.toast(done === undefined ? DASHBOARD_BUSY : [done.message, dashboardLine()].filter(Boolean).join(' '), { timeoutMs: 8000 })
 }
 
-/** A dashboard tool's answer: the words, and the address while the dashboard is on. */
+/**
+ * A dashboard tool's answer, as text blocks (the engine takes no bare object as a tool's value): the words
+ * first, then the address as a block of its own while the dashboard is on. Progress's /overview reads both.
+ */
 function dashboardResult(dashboard: Dashboard, lead = '') {
-  return { result: { text: lead + dashboardReport(dashboard), ...(dashboard.dashboard === 'on' && dashboard.address !== null ? { address: dashboard.address } : {}) } }
+  return { result: [textBlock(lead + dashboardReport(dashboard)), ...(dashboard.dashboard === 'on' && dashboard.address !== null ? [textBlock(dashboard.address)] : [])] }
 }
 
 /** The dashboard tool's status words: the line, the next step, and where to open the page or turn replies on. */

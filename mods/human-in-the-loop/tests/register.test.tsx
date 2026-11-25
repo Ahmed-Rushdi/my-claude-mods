@@ -13,6 +13,7 @@ import { cellsOf, rowsOf, wrapRows } from '../hooks/text'
 const ASSIGN = 'mcp__human-in-the-loop__assign_task'
 const LIST = 'mcp__human-in-the-loop__list_tasks'
 const WITHDRAW = 'mcp__human-in-the-loop__withdraw_task'
+const OPEN = 'mcp__human-in-the-loop__open_tasks'
 
 const PANE = {
   plugin: 'human-in-the-loop',
@@ -470,6 +471,23 @@ describe('assigning', () => {
     expect(await textOf(ui, 'actions')).toContain('Done')
     expect(await textOf(ui, 'actions')).not.toContain('Accept')
     expect(world.toasts).toHaveLength(0)
+  })
+
+  test('#203 every tool answers with text the engine accepts, not an object', async ($, on) => {
+    seat(on)
+    await start($)
+
+    const answers = [
+      await $.tool.call(KEY_TASK),
+      await $.tool.call({ tool: LIST } as never),
+      await $.tool.call({ tool: OPEN } as never),
+      await $.tool.call({ tool: WITHDRAW, id: 1, reason: 'Found the key in the vault' }),
+    ] as { deny?: string; result?: unknown }[]
+
+    for (const answer of answers) {
+      expect(answer.deny).toBeUndefined()
+      expect(typeof answer.result).toBe('string')
+    }
   })
 
   test('where the pane cannot be seated unasked, a toast points at /my-tasks', async ($, on) => {
@@ -6891,9 +6909,13 @@ describe('the dashboard', () => {
   /** What the dashboard tool answered `plugin`'s call: its words as `text` (a refusal's reason too), and its `address`. */
   const dashboardBy = async ($: Engine, plugin: string, action: string) => {
     const ran = await $.command.run({ command: `dashboard-by-${plugin}`, args: action, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
-    const done = JSON.parse(('text' in ran ? ran.text : undefined) ?? '{}') as { deny?: string; result?: { text?: string; address?: string } }
+    const done = JSON.parse(('text' in ran ? ran.text : undefined) ?? '{}') as { deny?: string; result?: unknown }
 
-    return { text: done.deny ?? done.result?.text, address: done.result?.address }
+    // #203: the answer is an array of text blocks (the words, then the address while the dashboard runs), never a bare object.
+    if (done.deny === undefined) expect(Array.isArray(done.result)).toBe(true)
+    const [words, address] = (Array.isArray(done.result) ? done.result : []) as { type: string; text: string }[]
+
+    return { text: done.deny ?? words?.text, address: address?.text }
   }
 
   /** The dashboard tool as Progress's /overview web|start|stop calls it (needs BY_PROGRESS), its words as `text`; a refusal's reason as `text` too. */

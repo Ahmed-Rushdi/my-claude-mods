@@ -1451,9 +1451,16 @@ async function dashboard($: EngineInterface, action: 'status' | 'start' | 'stop'
   }
   if (done.deny !== undefined) return { text: done.deny }
   if (done.isError === true) return { text: dashboardFailed(done.text ?? '') }
-  const said = done.result as { text?: unknown; address?: unknown } | string | undefined
+  // The tool answers in text blocks: its words first, then the address while the dashboard runs.
+  const said = done.result
   if (typeof said === 'string') return { text: said }
-  return { text: typeof said?.text === 'string' ? said.text : dashboardFailed(''), ...(typeof said?.address === 'string' ? { address: said.address } : {}) }
+  // human-in-the-loop 0.1.14 and older answered with a bare {text, address?} object; accept it so updating only Progress keeps /overview working.
+  if (typeof said === 'object' && said !== null && !Array.isArray(said)) {
+    const old = said as { text?: unknown; address?: unknown }
+    return { text: typeof old.text === 'string' ? old.text : dashboardFailed(''), ...(typeof old.address === 'string' ? { address: old.address } : {}) }
+  }
+  const [words, address] = (Array.isArray(said) ? said : []) as { text?: unknown }[]
+  return { text: typeof words?.text === 'string' ? words.text : dashboardFailed(''), ...(typeof address?.text === 'string' ? { address: address.text } : {}) }
 }
 
 const USAGE_TOOL = 'mcp__usage-collector__open_usage'
@@ -1597,7 +1604,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'mcp__progress__enroll' }, async ($, e) => {
     await bound($)
-    try { return { result: { text: await enrolled($, (e as unknown as { issues: string }).issues) } } }
+    try { return { result: await enrolled($, (e as unknown as { issues: string }).issues) } }
     catch (error) { return { deny: error instanceof Error ? error.message : String(error) } }
   })
   let reporting: Promise<void> = Promise.resolve()
@@ -1621,7 +1628,7 @@ export const register: Register = (on, options) => {
       if (id !== sessionId || await $.session.id().catch(() => '') !== id) throw new Error('Session changed; report again.')
       await publishOverview($)
       ensureWebControl($, id)
-      return { result: { text: `Progress reported for ${id}.` } }
+      return { result: `Progress reported for ${id}.` }
     } catch (error) { return { deny: error instanceof Error ? error.message : String(error) } }
     })
     reporting = reported.then(() => undefined, () => undefined)
@@ -1629,12 +1636,12 @@ export const register: Register = (on, options) => {
   })
   on('tool.call', { tool: 'mcp__progress__open' }, async ($) => {
     await bound($)
-    return { result: { text: await openProgress($) } }
+    return { result: await openProgress($) }
   })
   on('tool.call', { tool: 'mcp__progress__hide' }, async ($) => {
     await bound($)
     await hideProgress($)
-    return { result: { text: 'Progress hidden; refresh paused.' } }
+    return { result: 'Progress hidden; refresh paused.' }
   })
 
   // The band: the goal in one row, and under it what the session is doing now.

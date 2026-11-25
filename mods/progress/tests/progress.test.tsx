@@ -494,6 +494,21 @@ test('#165 an agent explicitly enrolls an issue and gets the same public snapsho
   await pane.unmount()
 })
 
+test('#203 every Progress tool answers with text the engine accepts, not an object', async ($, on) => {
+  await world($, on)
+  await start($)
+  const enrolled = await $.tool.call({ tool: 'mcp__progress__enroll', issues: '507' })
+  const published = await $.tool.call({ tool: 'mcp__progress__publish', session_id: 's1', repo: 'o/r', summary: 'Shape check' })
+  const opened = await $.tool.call({ tool: 'mcp__progress__open' })
+  const hidden = await $.tool.call({ tool: 'mcp__progress__hide' })
+  for (const answer of [enrolled, published, opened, hidden]) {
+    expect(answer.deny).toBeUndefined()
+    expect(typeof answer.result).toBe('string')
+  }
+  expect(published.result).toBe('Progress reported for s1.')
+  expect(hidden.result).toBe('Progress hidden; refresh paused.')
+})
+
 test('#165 explicitly selected parent and child retain hierarchy: since #198 the parent is the heading over the child', async ($, on) => {
   const { store, ran } = await world($, on)
   const data = JSON.parse(GITHUB)
@@ -883,7 +898,7 @@ function fakeDashboard(on: On, answer: { text?: string; address?: string; deny?:
   const asked: unknown[] = []
   on('tool.call', { tool: 'mcp__human-in-the-loop__dashboard' }, (_, e) => {
     asked.push((e as unknown as { action: string }).action)
-    return answer.deny === undefined ? { result: { text: answer.text ?? '', ...(answer.address === undefined ? {} : { address: answer.address }) } } : { deny: answer.deny }
+    return answer.deny === undefined ? { result: [{ type: 'text' as const, text: answer.text ?? '' }, ...(answer.address === undefined ? [] : [{ type: 'text' as const, text: answer.address }])] } : { deny: answer.deny }
   })
   return asked
 }
@@ -976,7 +991,7 @@ test('#167 bare /overview opens My tasks and Progress at once, and replies withi
   // human-in-the-loop's status read answers only after 5 s (its own limit is 20 s).
   on('tool.call', { tool: 'mcp__human-in-the-loop__dashboard' }, async () => {
     await clock.sleep(5000)
-    return { result: { text: 'dashboard: on', address: 'http://box:6767' } }
+    return { result: [{ type: 'text' as const, text: 'dashboard: on' }, { type: 'text' as const, text: 'http://box:6767' }] }
   })
   await start($)
   let replied: string | undefined
@@ -1368,4 +1383,13 @@ test('#181 bare /overview without usage-collector says nothing of Usage; /overvi
   await start($)
   expect(await overview($, '')).toMatch(/^My tasks opened\. Progress: /)
   expect(await overview($, 'usage')).toBe('Usage is unavailable; install or enable usage-collector.')
+})
+
+test('#203 a bare /overview still shows the address when human-in-the-loop 0.1.14 or older answers with the old {text, address} object', async ($, on) => {
+  await world($, on)
+  on('tool.call', { tool: 'mcp__human-in-the-loop__open_tasks' }, () => ({ result: 'My tasks opened.' }))
+  on('tool.call', { tool: 'mcp__human-in-the-loop__dashboard' }, () => ({ result: { text: 'dashboard: on', address: 'http://box:6767' } as never }))
+  await start($)
+  expect(await overview($, '')).toMatch(/Web dashboard: http:\/\/box:6767$/)
+  expect(await overview($, 'web')).toBe('dashboard: on')
 })
