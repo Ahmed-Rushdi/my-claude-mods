@@ -23,6 +23,11 @@
 <section id="progress" class="progress" role="tabpanel" aria-labelledby="progress-tab" tabindex="0">
 <div class="section-header"><h2 id="progress-heading">Issue progress</h2><span class="section-hint">Explicitly enrolled</span></div>
 <p id="progress-note" class="section-note">Issues you or an agent deliberately added. Only closed issues count as complete.</p>
+<div id="session-picker" class="session-picker" hidden>
+<label for="session-select">Session</label>
+<select id="session-select" aria-describedby="session-state"></select>
+<p id="session-state" class="session-state"></p></div>
+<p id="session-notice" class="quiet-line" role="status" hidden></p>
 <div id="progress-list" aria-busy="true"><p class="loading">Loading published progress…</p></div>
 </section>
 <section id="tasks" class="inbox" role="tabpanel" aria-labelledby="tasks-tab" tabindex="0" hidden>

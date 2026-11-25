@@ -1278,6 +1278,7 @@
     const target = owner.targets?.find((one) => sameOwnerRepo(one.repo, repo) && one.pull === pr.number);
     const mine = sameOwnerRepo(owner.ship?.repo, repo) && owner.ship.pull === pr.number ? owner.ship : null;
     if (!target && !mine) return null;
+    // TODO(deferred): #207 owner-merge lock keyed by profile labels; key by session id, repo and pull
     const key = JSON.stringify([sessionKey, repo, pr.number]);
     if (!ownerStates.has(key)) ownerStates.set(key, { busy: false, note: "", uncertain: false });
     ownerContexts.set(key, { session, sessionKey, repo, pr });
@@ -1514,14 +1515,17 @@
     const numbers = (session.goal.numbers || []).map((n) => "#" + n);
     return session.goal.repo + " " + numbers.slice(0, 3).join(", ") + (numbers.length > 3 ? " +" + (numbers.length - 3) : "");
   }
-  function earlierRow(session, published) {
-    const row = el("li", null, "earlier-row");
-    // A published session that has not ended says when it last published; the others, when
-    // their session was last seen.
+  // When a session last published, or (ended, or never published) was last seen, in words.
+  function lastWords(session, published, age = since) {
     const publishedAt = published && session.session_state !== "ended";
     const seen = Number(publishedAt ? session.snapshot.at : session.seen_ms ?? (published ? session.snapshot.at : NaN));
+    return Number.isFinite(seen) && seen > 0 ? (publishedAt ? "Last published " : "Last seen ") + age(seen) : "";
+  }
+  function earlierRow(session, published) {
+    const row = el("li", null, "earlier-row");
     const words = [];
-    if (Number.isFinite(seen) && seen > 0) words.push((publishedAt ? "Last published " : "Last seen ") + since(seen));
+    const when = lastWords(session, published);
+    if (when) words.push(when);
     words.push(shortGoal(session, published));
     // A session that ended can no longer publish, so nothing here asks it to.
     if (!published && session.session_state !== "ended") words.push("Not published");
@@ -1529,17 +1533,100 @@
     row.append(el("span", session.session_id.slice(0, 8), "mono"), what);
     return row;
   }
+
+  // --- the session selector: "All active" (the folded view) or one picked session ----------------
+  // The pick is the session's key, kept in this browser only, so it survives polls and reloads and
+  // a session going quiet, ending or missing from a poll never moves it: only the owner changes it.
+  // While the picked session is absent, All active is shown with a notice, and the pick returns with it.
+  const PICK_KEY = "overview-progress-session";
+  const picker = document.getElementById("session-picker");
+  const pickerSelect = document.getElementById("session-select");
+  const pickerState = document.getElementById("session-state");
+  const pickerNotice = document.getElementById("session-notice");
+  let pickedKey = "";
+  try { pickedKey = localStorage.getItem(PICK_KEY) || ""; } catch (_) {}
+  let lastProgress = null;
+  function savePick() {
+    try { if (pickedKey) localStorage.setItem(PICK_KEY, pickedKey); else localStorage.removeItem(PICK_KEY); } catch (_) {}
+  }
+  const coarseAgo = (ms) => ago(Math.max(0, Math.round((Date.now() - ms) / 1000)));
+  const STATE_WORDS = new Set(["live", "quiet", "ended"]);
+  const profileWords = (session) => (session.profiles || []).join(", ") || "shared store";
+  function pickerLabel(entry) {
+    const { session, published } = entry;
+    return [shortGoal(session, published), profileWords(session), session.session_id.slice(0, 8),
+      STATE_WORDS.has(session.session_state) ? session.session_state : "state unknown", lastWords(session, published, coarseAgo)].filter(Boolean).join(" · ");
+  }
+  // The id inside a stored key, for the "(not in store)" option; "" when the key is not ours.
+  function keyId(key) {
+    try { const id = JSON.parse(key)[0]; return typeof id === "string" ? id : ""; } catch (_) { return ""; }
+  }
+  function keyProfiles(key) {
+    try { const labels = JSON.parse(key)[1]; return Array.isArray(labels) ? labels : []; } catch (_) { return []; }
+  }
+  // Options are kept in place while the sessions are the same, so an open list is not rebuilt by a poll.
+  function syncPicker(entries, picked, absentKey) {
+    picker.hidden = !entries.length;
+    const wanted = [["", "All active"], ...entries.map((entry) => [entry.sessionKey, pickerLabel(entry)])];
+    if (absentKey) wanted.push([absentKey, (keyId(absentKey).slice(0, 8) || "Picked session") + " (not in store)"]);
+    const options = Array.from(pickerSelect.options);
+    if (options.length === wanted.length && options.every((option, i) => option.value === wanted[i][0])) {
+      options.forEach((option, i) => setText(option, wanted[i][1]));
+    } else {
+      pickerSelect.replaceChildren(...wanted.map(([value, text]) => { const option = el("option", text); option.value = value; return option; }));
+    }
+    pickerSelect.value = picked ? picked.sessionKey : absentKey;
+  }
+  function pickedStateLine(entry) {
+    const { session, published } = entry;
+    const state = STATE_WORDS.has(session.session_state) ? "Session " + session.session_state : "Session state unknown (no task store holds it)";
+    return [state, lastWords(session, published)].filter(Boolean).join(" · ");
+  }
+  // A session with no published snapshot (never published, or an older Progress): its goal and one line.
+  function unpublishedSession(session) {
+    const node = el("article", null, "session");
+    const head = el("h3", null, "session-head");
+    head.append(shortGoal(session, false), el("span", "Session " + session.session_id.slice(0, 8) + " · " + profileWords(session), "mono"));
+    node.append(head, el("p", "No published snapshot for this session.", "quiet-line"));
+    return node;
+  }
+  pickerSelect.addEventListener("change", () => {
+    pickedKey = pickerSelect.value;
+    savePick();
+    if (lastProgress) renderProgress(lastProgress.data, lastProgress.tasks);
+  });
   function renderProgress(data, tasks) {
-    const nodes = []; const folded = []; const live = new Set(); let total = 0;
-    for (const session of data.sessions) {
-      const sessionKey = JSON.stringify([session.session_id, [...(session.profiles || [])].sort()]);
-      const published = session.snapshot?.version === 1 && session.snapshot.view && Array.isArray(session.snapshot.view.sections);
-      if (foldsAway(session, published)) { folded.push(earlierRow(session, published)); continue; }
-      live.add(sessionKey);
-      refreshOwnerContexts(session, sessionKey);
+    lastProgress = { data, tasks };
+    const nodes = []; const folded = []; const keep = new Set(); let total = 0;
+    const entries = data.sessions.map((session) => ({
+      session,
+      sessionKey: JSON.stringify([session.session_id, [...(session.profiles || [])].sort()]),
+      published: session.snapshot?.version === 1 && session.snapshot.view && Array.isArray(session.snapshot.view.sections),
+    }));
+    // The stored key first; else the same session id when its profile labels may only have changed:
+    // exactly one session has that id and it shares a profile label with the pick, or either side
+    // has no profile labels at all (a store going from [A] to shared []). Another profile's session
+    // with the same id is a different session, never shown in its place.
+    const sameId = !pickedKey ? [] : entries.filter((entry) => entry.session.session_id === keyId(pickedKey));
+    const byId = sameId.length === 1 && (!(sameId[0].session.profiles || []).length || !keyProfiles(pickedKey).length || (sameId[0].session.profiles || []).some((label) => keyProfiles(pickedKey).includes(label))) ? sameId[0] : null;
+    const picked = !pickedKey ? null : entries.find((entry) => entry.sessionKey === pickedKey) || byId;
+    const absent = Boolean(pickedKey && !picked && entries.length);
+    setText(pickerNotice, absent ? "The session you picked is not in the store right now. Showing all active sessions." : "");
+    pickerNotice.hidden = !absent;
+    syncPicker(entries, picked, absent ? pickedKey : "");
+    setText(pickerState, picked ? pickedStateLine(picked) : "");
+    // Before any card is built, so a card is painted with an already settled lock.
+    for (const entry of entries) if (entry.published) refreshOwnerContexts(entry.session, entry.sessionKey);
+    for (const entry of picked ? [picked] : entries) {
+      const { session, sessionKey, published } = entry;
+      // "All active" folds the sessions not worth a card; a picked session is always one card.
+      if (!picked && foldsAway(session, published)) { folded.push(earlierRow(session, published)); continue; }
+      if (!published) { nodes.push(unpublishedSession(session)); continue; }
       total += session.snapshot.view.total;
       const signature = JSON.stringify([session, tasks.filter((t) => t.session_id === session.session_id).map((t) => [t.id, t.title])]);
       let stored = sessionViews.get(sessionKey);
+      // A card kept while its session was off screen is not painted by the async handlers: rebuild it.
+      if (stored && !stored.node.isConnected) stored = undefined;
       // Avoid replacing a focused reader on an unrelated polling tick.
       if (!stored || stored.signature !== signature) {
         const node = publishedSession(session, tasks, sessionKey);
@@ -1550,11 +1637,25 @@
       }
       nodes.push(stored.node);
     }
-    for (const key of sessionViews.keys()) if (!live.has(key)) sessionViews.delete(key);
-    for (const key of refreshStates.keys()) if (!live.has(key)) refreshStates.delete(key);
-    for (const [key, context] of ownerContexts) if (!live.has(context.sessionKey)) { ownerContexts.delete(key); ownerStates.delete(key); }
-    for (const [key, state] of documents) if (!live.has(state.sessionKey)) documents.delete(key);
-    for (const cancelled of data.cancelled || []) { const node = el("div", null, "cancelled"); node.append(icon("fail"), el("p", cancelled.note)); nodes.push(node); }
+    // Page state follows the store, not what is drawn: a folded, quiet or ended session shows its
+    // owner controls when picked, so it keeps its state (cards, Refresh GitHub status, document
+    // text) while its published snapshot is in the response. A session absent from the response
+    // loses it, except owner merge states and contexts: those are never pruned (owner decision,
+    // AskUserQuestion 2026-11-25, "Never drop lock state"), since an absence may be one poll with
+    // the store file skipped while a merge request is sending or unconfirmed.
+    for (const entry of entries) {
+      if (!entry.published) continue;
+      keep.add(entry.sessionKey);
+    }
+    for (const key of sessionViews.keys()) if (!keep.has(key)) sessionViews.delete(key);
+    for (const key of refreshStates.keys()) if (!keep.has(key)) refreshStates.delete(key);
+    for (const [key, state] of documents) if (!keep.has(state.sessionKey)) documents.delete(key);
+    // A picked session shows only the notes of a merge-when-green its own profiles cancelled.
+    const pickedProfiles = new Set(picked?.session.profiles || []);
+    for (const cancelled of data.cancelled || []) {
+      if (picked && !(cancelled.profiles || []).some((label) => pickedProfiles.has(label))) continue;
+      const node = el("div", null, "cancelled"); node.append(icon("fail"), el("p", cancelled.note)); nodes.push(node);
+    }
     if (!nodes.length && folded.length) nodes.push(el("p", "No session is publishing progress now.", "quiet-line"));
     else if (!nodes.length) { const empty = el("div", null, "empty"); empty.append(icon("tray"), el("p", "No published progress yet", "empty-head"), el("p", "Deliberately enroll issues with /progress add in Claude. Published progress appears here automatically.", "empty-line")); nodes.push(empty); }
     if (folded.length) {

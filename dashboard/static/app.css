@@ -13,7 +13,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);overflow-wrap:anywhere}
-button,input,textarea{font:inherit;color:inherit}
+button,input,textarea,select{font:inherit;color:inherit}
 button,a,input,textarea,summary{-webkit-tap-highlight-color:transparent}
 button,summary{cursor:pointer}
 button:disabled,button[aria-disabled=true]{cursor:default;opacity:.55}
@@ -52,6 +52,12 @@ small,.mono,.num,time,.tab-count{font-variant-numeric:tabular-nums}
 .section-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:5px}
 .section-hint,.section-note{font-size:12px;color:var(--muted)}
 .section-note{margin-bottom:20px;max-width:70ch}
+.session-picker{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:14px}
+.session-picker label{font-size:12px;font-weight:550;color:var(--muted)}
+.session-picker select{flex:1 1 240px;min-width:0;max-width:100%;min-height:36px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink);padding:7px 8px;font:inherit;font-size:13px}
+.session-picker select:hover{border-color:var(--muted)}
+.session-state{flex:1 0 100%;font-size:12px;color:var(--muted);margin:0}
+.session-state:empty{display:none}
 .session{padding:18px 0 25px;border-top:1px solid var(--line)}
 .session:first-child{border-top:0;padding-top:0}
 .session-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);margin-bottom:9px;font-weight:500}
@@ -301,4 +307,4 @@ small,.mono,.num,time,.tab-count{font-variant-numeric:tabular-nums}
 [data-theme=t3c] .layout{padding-top:20px}
 }
 /* Control edges meet 3:1 against every T3C surface; hairline rules stay at T3's #262626. */
-[data-theme=t3c] .button:not(.quiet):not(.primary),[data-theme=t3c] .reply textarea,[data-theme=t3c] .pin input{border-color:var(--control-line)}
+[data-theme=t3c] .button:not(.quiet):not(.primary),[data-theme=t3c] .reply textarea,[data-theme=t3c] .pin input,[data-theme=t3c] .session-picker select{border-color:var(--control-line)}
