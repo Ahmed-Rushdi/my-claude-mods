@@ -554,6 +554,23 @@ def is_ticket(value) -> bool:
     )
 
 
+def is_enrolled(ticket, goal) -> bool:
+    """Whether a goal ticket was enrolled: named in `numbers`, or a sub-issue whose chain of
+    parent headings reaches a named issue (Progress #198: an enrolled parent with sub-issues is
+    a heading, and its sub-issues are counted tickets that are not in `numbers`)."""
+    named = set(goal["numbers"])
+    heads = {one["number"]: one.get("parent") for one in goal["heads"]}
+    at = ticket["number"]
+    parent = ticket.get("parent")
+    for _ in range(len(heads) + 1):
+        if at in named:
+            return True
+        if parent not in heads:
+            return parent in named
+        at, parent = parent, heads[parent]
+    return False
+
+
 def is_goal(value) -> bool:
     if not (
         has_fields(value, text=("repo", "title", "error"), stamps=("fetchedAt",))
@@ -570,7 +587,9 @@ def is_goal(value) -> bool:
             and len({one["number"] for one in listed}) == len(listed)
         ):
             return False
-    if not {one["number"] for one in value["tickets"]} <= set(value["numbers"]):
+    if not all(
+        is_enrolled(one, value) for key in ("tickets", "heads") for one in value[key]
+    ):
         return False
     sections = value.get("sections", {})
     landed = value.get("landedAt", {})
