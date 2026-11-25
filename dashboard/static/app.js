@@ -1418,6 +1418,8 @@
     });
     row.append(button, status); return row;
   }
+  // Left to right on the issue bar; one colour token per state (--state-*) in app.css. Keep in step with STATE_ORDER in mods/progress/hooks/states.ts.
+  const STATE_ORDER = ["shipped", "umbrella", "yours", "doing", "ready", "blocked", "deferred"];
   function publishedSession(session, tasks, sessionKey) {
     const snap = session.snapshot;
     const node = el("article", null, "session");
@@ -1436,10 +1438,29 @@
     meta.append(el("span", snap.view.completed + " of " + snap.view.total + " issues closed", "completion"), el("span", "Issues only"));
     node.append(meta);
     const meter = el("div", null, "completion-track"); meter.setAttribute("role", "progressbar"); meter.setAttribute("aria-label", "Closed issues"); meter.setAttribute("aria-valuemin", "0"); meter.setAttribute("aria-valuemax", String(Math.max(1, snap.view.total))); meter.setAttribute("aria-valuenow", String(snap.view.completed));
-    const fill = el("span", null, "completion-fill");
-    // A finite number is the only value allowed into the style property.
-    const percent = snap.view.total ? Math.min(100, Math.max(0, 100 * snap.view.completed / snap.view.total)) : 0;
-    fill.style.setProperty("--complete", Number.isFinite(percent) ? percent + "%" : "0%"); meter.append(fill); node.append(meter);
+    // The bar is drawn by state, in STATE_ORDER; an id outside it (an old snapshot) draws no segment.
+    const stateCounts = STATE_ORDER.map((id) => {
+      const section = snap.view.sections.find((one) => one.id === id);
+      return { id, label: section?.label || "", count: section ? section.tickets.length : 0 };
+    }).filter((one) => one.count > 0);
+    const inSections = stateCounts.reduce((sum, one) => sum + one.count, 0);
+    // Only finite, clamped numbers reach the style property; the plain remainder is issues in no section.
+    const share = (n) => { const v = Number(n); return Number.isFinite(v) ? Math.min(snap.view.total, Math.max(0, v)) : 0; };
+    for (const one of stateCounts) {
+      const seg = el("span", null, "state-seg"); seg.dataset.state = one.id; seg.style.flexGrow = String(share(one.count)); meter.append(seg);
+    }
+    const rest = share(snap.view.total - inSections);
+    if (rest > 0) { const plain = el("span", null, "state-rest"); plain.style.flexGrow = String(rest); meter.append(plain); }
+    meter.setAttribute("aria-valuetext", snap.view.completed + " of " + snap.view.total + " issues closed" + (stateCounts.length ? ". " + stateCounts.map((one) => one.label + " " + one.count).join(", ") : ""));
+    node.append(meter);
+    if (stateCounts.length) {
+      const legend = el("ul", null, "state-legend");
+      for (const one of stateCounts) {
+        const item = el("li"); const swatch = el("i", null, "state-swatch"); swatch.dataset.state = one.id; swatch.setAttribute("aria-hidden", "true");
+        item.append(swatch, one.label + " ", el("b", one.count)); legend.append(item);
+      }
+      node.append(legend);
+    }
     const stamp = el("p", null, "snapshot-age");
     const timestamp = Number(snap.at);
     stamp.dataset.at = String(timestamp); updateSnapshotAge(stamp); node.append(stamp);
@@ -1450,7 +1471,10 @@
       const details = el("details", null, "issue-group");
       const sectionKey = sessionKey + ":section:" + section.id;
       rememberDetails(details, sectionKey, section.fold !== "closed");
-      const summary = el("summary"); summary.append(icon("chevron"), section.label, el("span", section.tickets.length, "group-count")); details.append(summary);
+      const summary = el("summary"); summary.append(icon("chevron"));
+      // An id the stylesheet does not know gets no swatch rather than an empty colourless box.
+      if (STATE_ORDER.includes(section.id)) { const swatch = el("i", null, "state-swatch"); swatch.dataset.state = section.id; swatch.setAttribute("aria-hidden", "true"); summary.append(swatch); }
+      summary.append(section.label, el("span", section.tickets.length, "group-count")); details.append(summary);
       const list = el("ol", null, "issue-list");
       const expanded = section.fold === "all" || disclosureExpanded.has(sectionKey);
       for (const [index, ticket] of section.tickets.entries()) {

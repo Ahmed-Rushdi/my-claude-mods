@@ -44,6 +44,7 @@ import type { OwnerAction, OwnerOutcome, WebControl } from './web-control'
 import { savedActivity, savedGoal } from './saved'
 import { STILL, feelsOf, look, nudge, pressing, resetFeel } from './feel'
 import { age, bar, oneLine, printable } from './observe'
+import { STATE_COLOR, STATE_ORDER, bandWords, stateColor, stateDim, stateSegments } from './states'
 
 const PANE = 'progress'
 const POLL_MS = 180_000
@@ -67,7 +68,25 @@ const TOOLS = [
   { name: 'hide', description: 'Hide Progress and pause GitHub refresh. Keeps explicitly selected issues and reports.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
 ]
 /** Theme keys keep status colors consistent on native surfaces. */
-const COLOR: Record<Status, string> = { yours: 'warning', doing: 'suggestion', blocked: 'error', ready: 'success', done: 'merged' }
+const COLOR: Record<Status, string | undefined> = { yours: STATE_COLOR.yours, doing: STATE_COLOR.doing, blocked: STATE_COLOR.blocked, ready: STATE_COLOR.ready, done: STATE_COLOR.shipped }
+
+/** The issue bar by state (#209): a coloured run of cells per non-empty state in the shared order, then plain track. Deferred is dim. */
+function StateBar({ Text, view, width }: { Text: any; view: { total: number; sections: readonly { id: SectionId; tickets: readonly unknown[] }[] }; width: number }) {
+  const counts = Object.fromEntries(STATE_ORDER.map(id => [id, view.sections.find(one => one.id === id)?.tickets.length ?? 0])) as Record<SectionId, number>
+  const cells = stateSegments(counts, view.total, width)
+  const used = cells.reduce((sum, one) => sum + one.cells, 0)
+
+  return (
+    <Text>
+      {cells.map(one => (
+        <Text key={one.id} color={stateColor(one.id)} dimColor={stateDim(one.id)}>
+          {'▰'.repeat(one.cells)}
+        </Text>
+      ))}
+      {'▱'.repeat(Math.max(0, width - used))}
+    </Text>
+  )
+}
 
 const EMPTY: Snap = {
   goal: '',
@@ -1663,15 +1682,8 @@ export const register: Register = (on, options) => {
     const total = view.total
     // A heading's own PR out of draft waits for the person as a ticket's does.
     const yours = [...(g?.heads ?? []), ...tickets].filter(one => statusOf(one, tickets, s.agents) === 'yours')
-    // By the pane's sections: ready leaves out the deferred ones, and landed work is said as in umbrella and shipped (#125).
-    const BAND_COUNTS: readonly { id: SectionId; label: string; hue: Status }[] = [
-      { id: 'doing', label: 'in progress', hue: 'doing' },
-      { id: 'blocked', label: 'blocked', hue: 'blocked' },
-      { id: 'ready', label: 'ready', hue: 'ready' },
-      { id: 'umbrella', label: 'in umbrella', hue: 'done' },
-      { id: 'shipped', label: 'complete', hue: 'done' },
-    ]
-    const rest = BAND_COUNTS.map(one => ({ ...one, n: count(one.id) })).filter(one => one.n > 0)
+    // By the pane's sections, in the bar's order: ready leaves out the deferred ones, and landed work is said as in umbrella and complete (#125).
+    const rest = bandWords(Object.fromEntries(STATE_ORDER.map(id => [id, count(id)])) as Record<SectionId, number>)
     const running = s.agents.filter(one => one.endedAt === null)
     const last = s.marks.at(-1)
 
@@ -1683,7 +1695,7 @@ export const register: Register = (on, options) => {
             {total > 0 && (
               <Text>
                 {' '}
-                {done}/{total} <Text color={COLOR.done}>{bar(done, total, 10)}</Text>
+                {done}/{total} <StateBar Text={Text} view={view} width={10} />
               </Text>
             )}
             {yours.length > 0 && (
@@ -1699,7 +1711,7 @@ export const register: Register = (on, options) => {
             {rest.map(one => (
               <Text>
                 <Text dimColor> · </Text>
-                <Text color={COLOR[one.hue]}>
+                <Text color={stateColor(one.id)} dimColor={stateDim(one.id)}>
                   {one.n} {one.label}
                 </Text>
               </Text>
@@ -2018,7 +2030,7 @@ export const register: Register = (on, options) => {
               {inSections > 0 && (
                 <Text>
                   {' '}
-                  {landed}/{inSections} <Text color={COLOR.done}>{bar(landed, inSections, 12)}</Text>
+                  {landed}/{inSections} <StateBar Text={Text} view={view} width={12} />
                 </Text>
               )}
             </Text>
@@ -2066,13 +2078,11 @@ export const register: Register = (on, options) => {
             {view.sections.map(({ id, label, fold, tickets: rows }) => {
               const isLanded = id === 'umbrella' || id === 'shipped'
               const shown = fold === 'all' ? rows : isLanded ? rows.slice(-FIRST_ROWS) : rows.slice(0, FIRST_ROWS)
-              const hue = isLanded ? 'done' : id === 'deferred' ? 'ready' : id
-
               return (
                 <Box key={`section-${id}`} flexDirection="column" marginTop={1}>
                   <Button key={`s-${id}`} plain hover={feel(`s-${id}`).hover} onPress={press(`s-${id}`, () => foldSection($, id, 'toggle'))}>
                     {feel(`s-${id}`).mark}
-                    <Text bold color={COLOR[hue as Status]} dimColor={rows.length === 0 || id === 'deferred'}>
+                    <Text bold color={stateColor(id)} dimColor={rows.length === 0 || stateDim(id)}>
                       {fold === 'closed' ? '▸ ' : '▾ '}
                       {label}
                     </Text>
@@ -2110,7 +2120,7 @@ export const register: Register = (on, options) => {
             {s.steps.length > 0 && (
               <Text wrap="truncate-end">
                 <Text dimColor>plan </Text>
-                {done}/{s.steps.length} <Text color={COLOR.done}>{bar(done, s.steps.length, 8)}</Text>
+                {done}/{s.steps.length} <Text color="merged">{bar(done, s.steps.length, 8)}</Text>
                 {doing !== undefined && <Text> {doing.doing || doing.text}</Text>}
               </Text>
             )}
